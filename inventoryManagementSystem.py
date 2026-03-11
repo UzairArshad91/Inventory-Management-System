@@ -81,8 +81,6 @@ class DuplicateProductError(InventoryError):
 
 # Backend Classes
 
-# ==================== BACKEND CLASSES ====================
-
 class Product:
     """Represents a product in the inventory with full validation.
     
@@ -255,7 +253,12 @@ class CategoryManager:
         """
         if inventory.get_products_by_category(category):
             raise ValueError("Cannot remove category with products.")
-        self._categories.discard(category)
+        
+        if category not in self._categories:
+            raise CategoryNotFoundError(f"Category '{category}' does not exist.")
+
+        self._categories.remove(category)
+
         logger.info(f"Category '{category}' removed.")
 
     def list_categories(self) -> List[str]:
@@ -508,7 +511,7 @@ class StorageManager:
                 logger.info(f"Inventory loaded from {self.filename}")
             else:
                 logger.info("No existing inventory file found. Starting with empty inventory.")
-        except (FileNotFoundError, json.JSONDecodeError) as e:
+        except (FileNotFoundError, json.JSONDecodeError, KeyError, TypeError) as e:
             logger.error(f"Error loading inventory: {e}")
         return inv
 
@@ -813,7 +816,7 @@ class InventoryApp(ctk.CTk):
         ctk.CTkLabel(search_frame, text="Search:").pack(side="left", padx=5)
 
         # Search entry with reduced width
-        self.search_entry = ctk.CTkEntry(search_frame, placeholder_text="Enter product name", width=int(self.winfo_screenwidth() *.3))
+        self.search_entry = ctk.CTkEntry(search_frame, placeholder_text="Enter product name", width=int(self.winfo_screenwidth() * SEARCH_ENTRY_WIDTH_FACTOR))
         self.search_entry.pack(side="left", padx=20)
 
         # Bind typing to live search
@@ -964,7 +967,12 @@ class InventoryApp(ctk.CTk):
         # Update category dropdown
         if categories:
             self.cat_dropdown.configure(values=categories)
-            self.cat_dropdown.set(categories[0])
+            if categories:
+                self.cat_dropdown.configure(values=categories)
+                self.cat_dropdown.set(categories[0])
+            else:
+                self.cat_dropdown.configure(values=["Select Category"])
+                self.cat_dropdown.set("Select Category")
 
 
 
@@ -1110,7 +1118,7 @@ class InventoryApp(ctk.CTk):
 
             # Product rows
             for i, p in enumerate(products):
-                row_color = "#2b2b2b" if i % 2 == 0 else "#232323"
+                row_color = ROW_ALTERNATE_COLOR_1 if i % 2 == 0 else ROW_ALTERNATE_COLOR_2
 
                 row_frame = ctk.CTkFrame(
                     self.prod_scroll,
@@ -1163,7 +1171,12 @@ class InventoryApp(ctk.CTk):
     def apply_low_stock_threshold(self) -> None:
         """Apply and save the low stock threshold setting."""
         try:
-            value = int(self.threshold_entry.get())
+            text = self.threshold_entry.get().strip()
+
+            if not text:
+                raise ValueError("Threshold cannot be empty")
+
+            value = int(text)
 
             if value < 0:
                 raise ValueError
@@ -1272,9 +1285,8 @@ class InventoryApp(ctk.CTk):
             self.show_error(f"Export failed: {e}")
 
     def clear_sort(self) -> None:
-        """Reset product list sorting to default (by ID)."""
-        self.sort_var.set("Sort by Price")  # Reset dropdown
-        self.update_product_list()  # Refresh list
+        self.sort_var.set("")
+        self.update_product_list()
 
     def on_close(self) -> None:
         """Save inventory and close the application."""
