@@ -3,105 +3,209 @@ from tkinter import messagebox
 import json
 from pathlib import Path
 import csv
+import logging
+import shutil
+from typing import Optional, List, Dict, Any
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 from datetime import datetime
 
+# ==================== CONFIGURATION & CONSTANTS ====================
 
-# Custom Exceptions
+# Application Settings
+WINDOW_SIZE_FACTOR = 0.8
+HEADER_HEIGHT = 80
+LOW_STOCK_THRESHOLD_DEFAULT = 10
+MAX_PRODUCT_NAME_LENGTH = 100
+MAX_CATEGORY_NAME_LENGTH = 50
+PRODUCT_ID_MIN = 1
+
+# File Settings
+DEFAULT_INVENTORY_FILE = "inventory.json"
+DEFAULT_BACKUP_FILE = "inventory_backup.json"
+DEFAULT_CSV_FILE = "inventory_export.csv"
+DEFAULT_PDF_FILE = "inventory_export.pdf"
+BACKUP_COUNT = 3  # Keep last 3 backups
+
+# UI Colors & Theme
+PRIMARY_COLOR = "blue"
+APPEARANCE_MODE = "dark"
+ERROR_COLOR = "#dc2626"
+ERROR_HOVER_COLOR = "#b91c1c"
+SUCCESS_COLOR = "#22c55e"
+ALERT_COLOR = "#FF7E7E"
+ROW_ALTERNATE_COLOR_1 = "#2b2b2b"
+ROW_ALTERNATE_COLOR_2 = "#232323"
+HEADER_BG_COLOR = "#1f1f1f"
+
+# UI Dimensions
+SEARCH_ENTRY_WIDTH_FACTOR = 0.3
+STANDARD_ENTRY_WIDTH = 200
+DELETE_BTN_WIDTH = 300
+
+# Logging Configuration
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[logging.StreamHandler()]
+)
+logger = logging.getLogger(__name__)
+
+
+# ==================== CUSTOM EXCEPTIONS ====================
+
 class InventoryError(Exception):
-    """Base exception for inventory-related errors"""
+    """Base exception for inventory-related errors."""
     pass
+
 
 class ProductNotFoundError(InventoryError):
-    """Raised when a product is not found"""
+    """Raised when a product is not found in the inventory."""
     pass
+
 
 class InvalidInputError(InventoryError):
-    """Raised when input validation fails"""
+    """Raised when input validation fails."""
     pass
+
 
 class CategoryNotFoundError(InventoryError):
-    """Raised when a category is not found"""
+    """Raised when a category is not found in the category manager."""
     pass
 
+
 class DuplicateProductError(InventoryError):
-    """Raised when trying to add a duplicate product ID"""
+    """Raised when trying to add a product with a duplicate ID."""
     pass
 
 
 # Backend Classes
 
+# ==================== BACKEND CLASSES ====================
+
 class Product:
-    """Represents a product with validation"""
-    def __init__(self, id, name, category, price, quantity):
+    """Represents a product in the inventory with full validation.
+    
+    Attributes:
+        id: Unique product identifier (positive integer)
+        name: Product name (non-empty string, max 100 chars)
+        category: Product category (non-empty string, max 50 chars)
+        price: Product price (non-negative float)
+        quantity: Stock quantity (non-negative integer)
+    """
+    
+    def __init__(self, id: int, name: str, category: str, price: float, quantity: int) -> None:
+        """Initialize a product with validation.
+        
+        Args:
+            id: Unique product identifier
+            name: Product name
+            category: Product category
+            price: Product price
+            quantity: Initial stock quantity
+            
+        Raises:
+            InvalidInputError: If any validation fails
+        """
         self._validate_id(id)
         self._validate_name(name)
         self._validate_category(category)
         self._validate_price(price)
         self._validate_quantity(quantity)
         
-        self.id = id
-        self.name = name.strip()
-        self.category = category.strip()
-        self._price = price
-        self._quantity = quantity
+        self.id: int = id
+        self.name: str = name.strip()
+        self.category: str = category.strip()
+        self._price: float = price
+        self._quantity: int = quantity
 
-    def _validate_id(self, id):
-        """Validate product ID"""
-        if not isinstance(id, int) or id <= 0:
+    def _validate_id(self, id: int) -> None:
+        """Validate that product ID is a positive integer."""
+        if not isinstance(id, int) or id <= PRODUCT_ID_MIN - 1:
             raise InvalidInputError("Product ID must be a positive integer.")
 
-    def _validate_name(self, name):
-        """Validate product name"""
+    def _validate_name(self, name: str) -> None:
+        """Validate that product name is non-empty and within length limits."""
         if not name or not isinstance(name, str) or not name.strip():
             raise InvalidInputError("Product name cannot be empty.")
-        if len(name.strip()) > 100:
-            raise InvalidInputError("Product name cannot exceed 100 characters.")
+        if len(name.strip()) > MAX_PRODUCT_NAME_LENGTH:
+            raise InvalidInputError(f"Product name cannot exceed {MAX_PRODUCT_NAME_LENGTH} characters.")
 
-    def _validate_category(self, category):
-        """Validate product category"""
+    def _validate_category(self, category: str) -> None:
+        """Validate that category is non-empty and within length limits."""
         if not category or not isinstance(category, str) or not category.strip():
             raise InvalidInputError("Product category cannot be empty.")
-        if len(category.strip()) > 50:
-            raise InvalidInputError("Category name cannot exceed 50 characters.")
+        if len(category.strip()) > MAX_CATEGORY_NAME_LENGTH:
+            raise InvalidInputError(f"Category name cannot exceed {MAX_CATEGORY_NAME_LENGTH} characters.")
 
-    def _validate_price(self, price):
-        """Validate product price"""
+    def _validate_price(self, price: float) -> None:
+        """Validate that price is a non-negative number."""
         if not isinstance(price, (int, float)) or price < 0:
             raise InvalidInputError("Price must be a non-negative number.")
 
-    def _validate_quantity(self, quantity):
-        """Validate product quantity"""
+    def _validate_quantity(self, quantity: int) -> None:
+        """Validate that quantity is a non-negative integer."""
         if not isinstance(quantity, int) or quantity < 0:
             raise InvalidInputError("Quantity must be a non-negative integer.")
 
     @property
-    def price(self):
+    def price(self) -> float:
+        """Get the product price."""
         return self._price
     
     @price.setter
-    def price(self, value):
+    def price(self, value: float) -> None:
+        """Set the product price with validation."""
         self._validate_price(value)
         self._price = value
 
     @property
-    def quantity(self):
+    def quantity(self) -> int:
+        """Get the current stock quantity."""
         return self._quantity
+    
+    @quantity.setter
+    def quantity(self, value: int) -> None:
+        """Set the stock quantity with validation."""
+        self._validate_quantity(value)
+        self._quantity = value
 
-    def increase_stock(self, amount):
+    def increase_stock(self, amount: int) -> None:
+        """Increase stock by the specified amount.
+        
+        Args:
+            amount: Quantity to add (non-negative integer)
+            
+        Raises:
+            InvalidInputError: If amount is invalid
+        """
         if not isinstance(amount, int) or amount < 0:
             raise InvalidInputError("Stock increase amount must be a non-negative integer.")
         self._quantity += amount
+        logger.info(f"Stock increased for {self.name} (ID: {self.id}) by {amount}. New quantity: {self._quantity}")
 
-    def decrease_stock(self, amount):
+    def decrease_stock(self, amount: int) -> None:
+        """Decrease stock by the specified amount.
+        
+        Args:
+            amount: Quantity to remove (non-negative integer)
+            
+        Raises:
+            InvalidInputError: If amount is invalid or exceeds available stock
+        """
         if not isinstance(amount, int) or amount < 0:
             raise InvalidInputError("Stock decrease amount must be a non-negative integer.")
         if amount > self._quantity:
             raise InvalidInputError(f"Cannot decrease stock by {amount}. Only {self._quantity} items available.")
         self._quantity -= amount
+        logger.info(f"Stock decreased for {self.name} (ID: {self.id}) by {amount}. New quantity: {self._quantity}")
 
-    def to_dict(self):
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert product to dictionary for serialization.
+        
+        Returns:
+            Dictionary with product data
+        """
         return {
             'id': self.id,
             'name': self.name,
@@ -110,40 +214,95 @@ class Product:
             'quantity': self.quantity
         }
 
-    def __str__(self):
+    def __str__(self) -> str:
+        """Return formatted string representation of the product."""
         return f"ID: {self.id} | {self.name} | {self.category} | ${self.price:.2f} | Qty: {self.quantity}"
 
 
 class CategoryManager:
-    """Manages product categories"""
-    def __init__(self):
-        self._categories = set()
+    """Manages product categories with validation and conflict checking."""
+    
+    def __init__(self) -> None:
+        """Initialize the category manager with an empty set of categories."""
+        self._categories: set = set()
 
-    def add_category(self, category):
+    def add_category(self, category: str) -> None:
+        """Add a new category.
+        
+        Args:
+            category: Category name to add
+            
+        Raises:
+            ValueError: If category is empty or exceeds length limits
+        """
         if not category or not category.strip():
             raise ValueError("Category name cannot be empty.")
-        self._categories.add(category.strip())
+        if len(category.strip()) > MAX_CATEGORY_NAME_LENGTH:
+            raise ValueError(f"Category name cannot exceed {MAX_CATEGORY_NAME_LENGTH} characters.")
+        clean_category = category.strip()
+        self._categories.add(clean_category)
+        logger.info(f"Category '{clean_category}' added.")
 
-    def remove_category(self, category, inventory):
+    def remove_category(self, category: str, inventory: 'Inventory') -> None:
+        """Remove a category if it has no associated products.
+        
+        Args:
+            category: Category name to remove
+            inventory: Inventory instance to check for products
+            
+        Raises:
+            ValueError: If category has associated products
+        """
         if inventory.get_products_by_category(category):
             raise ValueError("Cannot remove category with products.")
         self._categories.discard(category)
+        logger.info(f"Category '{category}' removed.")
 
-    def list_categories(self):
+    def list_categories(self) -> List[str]:
+        """Get sorted list of all categories.
+        
+        Returns:
+            Sorted list of category names
+        """
         return sorted(self._categories)
 
-    def category_exists(self, category):
+    def category_exists(self, category: str) -> bool:
+        """Check if a category exists.
+        
+        Args:
+            category: Category name to check
+            
+        Returns:
+            True if category exists, False otherwise
+        """
         return category in self._categories
 
 
 class Inventory:
-    """Manages the product inventory"""
-    def __init__(self):
-        self._products = {}
-        self.category_manager = CategoryManager()
+    """Manages the product inventory with categories and stock tracking.
+    
+    Handles adding, removing, updating products and their stock levels,
+    as well as category management and inventory valuation.
+    """
+    
+    def __init__(self) -> None:
+        """Initialize an empty inventory with a category manager."""
+        self._products: Dict[int, Product] = {}
+        self.category_manager: CategoryManager = CategoryManager()
 
-    def add_product(self, product):
-        """Add a new product to inventory"""
+    def add_product(self, product: Product) -> int:
+        """Add a new product or update an existing one.
+        
+        Args:
+            product: Product instance to add
+            
+        Returns:
+            1 if product was updated, 2 if product was added
+            
+        Raises:
+            InvalidInputError: If product is invalid
+            CategoryNotFoundError: If category doesn't exist
+        """
         if not isinstance(product, Product):
             raise InvalidInputError("Invalid product object.")
         
@@ -151,42 +310,85 @@ class Inventory:
             raise CategoryNotFoundError(f"Category '{product.category}' does not exist. Please add the category first.")
 
         if product.id in self._products:
-            # Update existing product
             self._products[product.id] = product
+            logger.info(f"Product updated: {product}")
             return 1  # Updated
         else:
-            # Add new product
             self._products[product.id] = product
+            logger.info(f"Product added: {product}")
             return 2  # Added
 
-    def remove_product(self, product_id):
-        """Remove a product by ID"""
+    def remove_product(self, product_id: int) -> None:
+        """Remove a product by ID.
+        
+        Args:
+            product_id: ID of product to remove
+            
+        Raises:
+            InvalidInputError: If product ID is invalid
+            ProductNotFoundError: If product doesn't exist
+        """
         if not isinstance(product_id, int) or product_id <= 0:
             raise InvalidInputError("Product ID must be a positive integer.")
         
         if product_id not in self._products:
             raise ProductNotFoundError(f"Product with ID {product_id} not found.")
         
+        product = self._products[product_id]
         del self._products[product_id]
+        logger.info(f"Product removed: {product}")
 
-    def get_product(self, product_id):
-        """Get a product by ID"""
+    def get_product(self, product_id: int) -> Optional[Product]:
+        """Get a product by ID.
+        
+        Args:
+            product_id: ID of product to retrieve
+            
+        Returns:
+            Product instance or None if not found
+            
+        Raises:
+            InvalidInputError: If product ID is invalid
+        """
         if not isinstance(product_id, int) or product_id <= 0:
             raise InvalidInputError("Product ID must be a positive integer.")
         return self._products.get(product_id, None)
 
-    def list_products(self):
-        """Return sorted list of all products"""
+    def list_products(self) -> List[Product]:
+        """Get all products sorted by ID.
+        
+        Returns:
+            Sorted list of all products
+        """
         return sorted(self._products.values(), key=lambda p: p.id)
 
-    def get_products_by_category(self, category):
-        """Get products by category"""
+    def get_products_by_category(self, category: str) -> List[Product]:
+        """Get all products in a specific category.
+        
+        Args:
+            category: Category name to filter by
+            
+        Returns:
+            List of products in the category
+            
+        Raises:
+            InvalidInputError: If category is invalid
+        """
         if not category or not isinstance(category, str):
             raise InvalidInputError("Invalid category name.")
         return [p for p in self._products.values() if p.category == category.strip()]
 
-    def update_stock(self, product_id, amount):
-        """Update stock for a product"""
+    def update_stock(self, product_id: int, amount: int) -> None:
+        """Update stock quantity for a product.
+        
+        Args:
+            product_id: ID of product to update
+            amount: Quantity change (positive or negative)
+            
+        Raises:
+            InvalidInputError: If inputs are invalid
+            ProductNotFoundError: If product doesn't exist
+        """
         if not isinstance(product_id, int) or product_id <= 0:
             raise InvalidInputError("Product ID must be a positive integer.")
         if not isinstance(amount, int):
@@ -201,56 +403,90 @@ class Inventory:
         else:
             product.decrease_stock(-amount)
 
-    def get_total_value(self):
-        """Calculate total inventory value"""
+    def get_total_value(self) -> float:
+        """Calculate the total monetary value of all inventory.
+        
+        Returns:
+            Sum of (price * quantity) for all products
+        """
         return sum(p.price * p.quantity for p in self._products.values())
+    
+    def get_low_stock_products(self, threshold: int) -> List[Product]:
+        """Get products with stock below threshold.
+        
+        Args:
+            threshold: Stock level threshold
             
-        # if product.id in self._products:
-        #     raise ValueError("Product ID already exists.")
-        self._products[product.id] = product
-        return 2
-
-    def remove_product(self, product_id):
-        if product_id not in self._products:
-            raise ValueError("Product not found.")
-        del self._products[product_id]
-
-    def get_product(self, product_id):
-        return self._products.get(product_id, None)
-
-    def list_products(self):
-        return sorted(self._products.values(), key=lambda p: p.id)
-
-    def get_products_by_category(self, category):
-        return [p for p in self._products.values() if p.category == category]
-
-    def update_stock(self, product_id, amount):
-        product = self.get_product(product_id)
-        if product is None:
-            raise ValueError("Product not found.")
-        if amount >= 0:
-            product.increase_stock(amount)
-        else:
-            product.decrease_stock(-amount)
-
-    def get_total_value(self):
-        return sum(p.price * p.quantity for p in self._products.values())
+        Returns:
+            List of products with quantity <= threshold
+        """
+        return [p for p in self._products.values() if p.quantity <= threshold]
 
 
 class StorageManager:
-    """Handles saving and loading inventory data"""
-    def __init__(self, filename="inventory.json"):
-        self.filename = filename
+    """Handles loading, saving, and exporting inventory data.
+    
+    Supports JSON serialization, CSV export, PDF reports, and automatic backups.
+    """
+    
+    def __init__(self, filename: str = DEFAULT_INVENTORY_FILE) -> None:
+        """Initialize storage manager with a filename.
+        
+        Args:
+            filename: Path to the inventory JSON file
+        """
+        self.filename: str = filename
+        self.backup_dir: Path = Path("backups")
+        self.backup_dir.mkdir(exist_ok=True)
 
-    def save_inventory(self, inventory):
-        data = {
-            'categories': inventory.category_manager.list_categories(),
-            'products': [p.to_dict() for p in inventory.list_products()]
-        }
-        with open(self.filename, 'w') as f:
-            json.dump(data, f, indent=2)
+    def save_inventory(self, inventory: Inventory) -> None:
+        """Save inventory to JSON file with automatic backup.
+        
+        Args:
+            inventory: Inventory instance to save
+        """
+        try:
+            # Create automatic backup
+            self._create_backup()
+            
+            data = {
+                'categories': inventory.category_manager.list_categories(),
+                'products': [p.to_dict() for p in inventory.list_products()]
+            }
+            with open(self.filename, 'w') as f:
+                json.dump(data, f, indent=2)
+            logger.info(f"Inventory saved to {self.filename}")
+        except Exception as e:
+            logger.error(f"Failed to save inventory: {e}")
+            raise
 
-    def load_inventory(self):
+    def _create_backup(self) -> None:
+        """Create an automatic backup of the current inventory file.
+        
+        Maintains a limited number of backups to save disk space.
+        """
+        if not Path(self.filename).exists():
+            return
+        
+        try:
+            backup_file = self.backup_dir / f"{Path(self.filename).stem}_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+            shutil.copy2(self.filename, backup_file)
+            logger.info(f"Backup created: {backup_file}")
+            
+            # Clean up old backups
+            backups = sorted(self.backup_dir.glob(f"{Path(self.filename).stem}_backup_*.json"), reverse=True)
+            for old_backup in backups[BACKUP_COUNT:]:
+                old_backup.unlink()
+                logger.info(f"Removed old backup: {old_backup}")
+        except Exception as e:
+            logger.warning(f"Backup creation failed: {e}")
+    
+    def load_inventory(self) -> Inventory:
+        """Load inventory from JSON file.
+        
+        Returns:
+            Inventory instance with loaded data
+        """
         inv = Inventory()
         try:
             if Path(self.filename).exists():
@@ -269,110 +505,152 @@ class StorageManager:
                         p_data['quantity']
                     )
                     inv.add_product(p)
-        except (FileNotFoundError, json.JSONDecodeError):
-            pass
+                logger.info(f"Inventory loaded from {self.filename}")
+            else:
+                logger.info("No existing inventory file found. Starting with empty inventory.")
+        except (FileNotFoundError, json.JSONDecodeError) as e:
+            logger.error(f"Error loading inventory: {e}")
         return inv
 
-    def export_to_csv(self, inventory, filename="inventory_export.csv"):
+    def export_to_csv(self, inventory: Inventory, filename: str = DEFAULT_CSV_FILE) -> None:
+        """Export inventory to CSV file.
+        
+        Args:
+            inventory: Inventory instance to export
+            filename: Output CSV file path
+            
+        Raises:
+            ValueError: If inventory is empty
+        """
         if not inventory.list_products():
             raise ValueError("No products to export.")
 
-        with open(filename, mode="w", newline="", encoding="utf-8") as file:
-            writer = csv.writer(file)
+        try:
+            with open(filename, mode="w", newline="", encoding="utf-8") as file:
+                writer = csv.writer(file)
+                writer.writerow(["ID", "Name", "Category", "Price", "Quantity"])
+                for product in inventory.list_products():
+                    writer.writerow([
+                        product.id,
+                        product.name,
+                        product.category,
+                        product.price,
+                        product.quantity
+                    ])
+            logger.info(f"Inventory exported to CSV: {filename}")
+        except Exception as e:
+            logger.error(f"CSV export failed: {e}")
+            raise
 
-            # Header
-            writer.writerow(["ID", "Name", "Category", "Price", "Quantity"])
+    def export_to_pdf(self, inventory: Inventory, filename: str = DEFAULT_PDF_FILE) -> None:
+        """Export inventory to PDF report.
+        
+        Args:
+            inventory: Inventory instance to export
+            filename: Output PDF file path
+            
+        Raises:
+            ValueError: If inventory is empty
+        """
+        if not inventory.list_products():
+            raise ValueError("No products to export.")
 
-            # Data rows
+        try:
+            c = canvas.Canvas(filename, pagesize=A4)
+            width, height = A4
+
+            y = height - 50
+
+            # Title
+            c.setFont("Helvetica-Bold", 18)
+            c.drawString(50, y, "Inventory Report")
+            y -= 25
+
+            # Date & time
+            current_time = datetime.now().strftime("%d %b %Y, %H:%M")
+            c.setFont("Helvetica", 10)
+            c.drawString(50, y, f"Generated on: {current_time}")
+            y -= 25
+
+            # Table header
+            c.setFont("Helvetica-Bold", 10)
+            headers = ["ID", "Name", "Category", "Price", "Quantity"]
+            x_positions = [50, 100, 260, 380, 450]
+
+            for header, x in zip(headers, x_positions):
+                c.drawString(x, y, header)
+
+            y -= 20
+            c.setFont("Helvetica", 10)
+
+            # Table rows
             for product in inventory.list_products():
-                writer.writerow([
-                    product.id,
-                    product.name,
-                    product.category,
-                    product.price,
-                    product.quantity
-                ])
+                if y < 50:  # New page
+                    c.showPage()
+                    c.setFont("Helvetica", 10)
+                    y = height - 50
 
-    def export_to_pdf(self, inventory, filename="inventory_export.pdf"):
-        if not inventory.list_products():
-            raise ValueError("No products to export.")
+                c.drawString(50, y, str(product.id))
+                c.drawString(100, y, product.name[:20])
+                c.drawString(260, y, product.category[:15])
+                c.drawString(380, y, f"${product.price:.2f}")
+                c.drawString(450, y, str(product.quantity))
 
-        c = canvas.Canvas(filename, pagesize=A4)
-        width, height = A4
+                y -= 18
 
-        y = height - 50
-
-        # Title
-        c.setFont("Helvetica-Bold", 18)
-        c.drawString(50, y, "Inventory Report")
-        y -= 25
-
-        # Date & time
-        current_time = datetime.now().strftime("%d %b %Y, %H:%M")
-        c.setFont("Helvetica", 10)
-        c.drawString(50, y, f"Generated on: {current_time}")
-        y -= 25
-
-        # Table header
-        c.setFont("Helvetica-Bold", 10)
-        headers = ["ID", "Name", "Category", "Price", "Quantity"]
-        x_positions = [50, 100, 260, 380, 450]
-
-        for header, x in zip(headers, x_positions):
-            c.drawString(x, y, header)
-
-        y -= 20
-        c.setFont("Helvetica", 10)
-
-        # Table rows
-        for product in inventory.list_products():
-            if y < 50:  # New page
-                c.showPage()
-                c.setFont("Helvetica", 10)
-                y = height - 50
-
-            c.drawString(50, y, str(product.id))
-            c.drawString(100, y, product.name[:20])
-            c.drawString(260, y, product.category[:15])
-            c.drawString(380, y, f"${product.price:.2f}")
-            c.drawString(450, y, str(product.quantity))
-
-            y -= 18
-
-        c.save()
+            c.save()
+            logger.info(f"Inventory exported to PDF: {filename}")
+        except Exception as e:
+            logger.error(f"PDF export failed: {e}")
+            raise
 
 
 
 
-#GUI
+# ==================== GUI SECTION ====================
 
 class InventoryApp(ctk.CTk):
-    def __init__(self):
+    """Main GUI application for inventory management system.
+    
+    Provides a tabbed interface for managing categories, products, and stock levels
+    with real-time UI updates and automatic data persistence.
+    """
+    
+    def __init__(self) -> None:
+        """Initialize the GUI application and load data."""
         super().__init__()
 
         # Get screen dimensions
-        screen_width = self.winfo_screenwidth()
-        screen_height = self.winfo_screenheight()
+        screen_width: int = self.winfo_screenwidth()
+        screen_height: int = self.winfo_screenheight()
 
-        # Calculate 70% of screen size
-        window_width = int(screen_width * .8)
-        window_height = int(screen_height * .8)
+        # Calculate window size
+        window_width: int = int(screen_width * WINDOW_SIZE_FACTOR)
+        window_height: int = int(screen_height * WINDOW_SIZE_FACTOR)
 
         # Calculate center position
-        x_position = (screen_width - window_width) // 2
-        y_position = (screen_height - window_height) // 2
-
+        x_position: int = (screen_width - window_width) // 2
+        y_position: int = (screen_height - window_height) // 2
 
         self.title("Inventory Management System")
         self.update_idletasks()
         self.geometry(f"{window_width}x{window_height}+{x_position}+{y_position}")
-        ctk.set_appearance_mode("dark")
-        ctk.set_default_color_theme("blue")
+        ctk.set_appearance_mode(APPEARANCE_MODE)
+        ctk.set_default_color_theme(PRIMARY_COLOR)
 
-        # Backend
-        self.storage = StorageManager()
-        self.inventory = self.storage.load_inventory()
-        self.low_stock_threshold = 10
+        # Backend initialization
+        self.storage: StorageManager = StorageManager()
+        self.inventory: Inventory = self.storage.load_inventory()
+        self.low_stock_threshold: int = LOW_STOCK_THRESHOLD_DEFAULT
+        
+        # UI components (initialized in create_* methods)
+        self.tabview: Optional[ctk.CTkTabview] = None
+        self.total_value_label: Optional[ctk.CTkLabel] = None
+        self.cat_scroll: Optional[ctk.CTkScrollableFrame] = None
+        self.prod_scroll: Optional[ctk.CTkScrollableFrame] = None
+        self.low_stock_scroll: Optional[ctk.CTkScrollableFrame] = None
+        self.search_entry: Optional[ctk.CTkEntry] = None
+        self.sort_var: Optional[ctk.StringVar] = None
 
         # Create UI
         self.create_header()
@@ -380,13 +658,14 @@ class InventoryApp(ctk.CTk):
         
         # Load initial data
         self.refresh_all()
+        logger.info("Application initialized successfully")
         
         # Auto-save on close
         self.protocol("WM_DELETE_WINDOW", self.on_close)
 
-    def create_header(self):
-        """Create header with title and total value"""
-        header = ctk.CTkFrame(self, height=80)
+    def create_header(self) -> None:
+        """Create header frame with title and total inventory value display."""
+        header = ctk.CTkFrame(self, height=HEADER_HEIGHT)
         header.pack(fill="x", padx=20, pady=(20, 10))
         header.pack_propagate(False)
         
@@ -398,8 +677,14 @@ class InventoryApp(ctk.CTk):
                                              font=ctk.CTkFont(size=16))
         self.total_value_label.pack()
 
-    def create_main_content(self):
-        """Create main content area with tabs"""
+    def create_main_content(self) -> None:
+        """Create tabbed main content area with three tabs.
+        
+        Creates tabs for:
+        - Categories: Manage product categories
+        - Products: Add/update/delete products
+        - Stock Management: Update stock and view low stock alerts
+        """
         self.tabview = ctk.CTkTabview(self)
         self.tabview.pack(fill="both", expand=True, padx=20, pady=10)
         
@@ -411,8 +696,8 @@ class InventoryApp(ctk.CTk):
         self.create_product_tab()
         self.create_stock_tab()
 
-    def create_category_tab(self):
-        """Create category management tab"""
+    def create_category_tab(self) -> None:
+        """Create category management tab with add/delete and list display."""
         tab = self.tabview.tab("Categories")
         
         # Input frame
@@ -446,8 +731,16 @@ class InventoryApp(ctk.CTk):
         self.cat_scroll.pack(fill="both", expand=True, padx=5, pady=5)
 
 
-    def create_product_tab(self):
-        """Create product management tab"""
+    def create_product_tab(self) -> None:
+        """Create product management tab with CRUD operations and search.
+        
+        Features:
+        - Add/update products
+        - Delete products  
+        - Search by name
+        - Sort by price
+        - Export to CSV/PDF
+        """
         tab = self.tabview.tab("Products")
         
 
@@ -549,8 +842,14 @@ class InventoryApp(ctk.CTk):
         self.prod_scroll = ctk.CTkScrollableFrame(list_frame)
         self.prod_scroll.pack(fill="both", expand=True, padx=5, pady=5)
 
-    def create_stock_tab(self):
-        """Create stock management tab"""
+    def create_stock_tab(self) -> None:
+        """Create stock management tab with update and low stock alerts.
+        
+        Features:
+        - Update stock quantities
+        - Set low stock threshold
+        - View low stock alerts
+        """
         tab = self.tabview.tab("Stock Management")
         
         # Input frame
@@ -602,9 +901,10 @@ class InventoryApp(ctk.CTk):
         self.low_stock_scroll.pack(fill="both", expand=True, padx=5, pady=5)
 
 
-    # ------------------ Category Operations ------------------
+    # ==================== CATEGORY OPERATIONS ====================
     
-    def add_category(self):
+    def add_category(self) -> None:
+        """Add a new category from user input."""
         name = self.cat_entry.get().strip()
         if not name:
             self.show_error("Category name cannot be empty")
@@ -618,7 +918,11 @@ class InventoryApp(ctk.CTk):
         except ValueError as e:
             self.show_error(str(e))
     
-    def delete_category(self):
+    def delete_category(self) -> None:
+        """Delete a category after confirmation.
+        
+        Prevents deletion of categories with associated products.
+        """
         name = self.cat_delete_entry.get().strip()
         if not name:
             self.show_error("Please enter a category name to delete")
@@ -638,7 +942,8 @@ class InventoryApp(ctk.CTk):
         except ValueError as e:
             self.show_error(str(e))
 
-    def update_category_list(self):
+    def update_category_list(self) -> None:
+        """Refresh the category list display and update category dropdown."""
         for widget in self.cat_scroll.winfo_children():
             widget.destroy()
 
@@ -663,9 +968,13 @@ class InventoryApp(ctk.CTk):
 
 
 
-    # ------------------ Product Operations ------------------
+    # ==================== PRODUCT OPERATIONS ====================
     
-    def add_product(self):
+    def add_product(self) -> None:
+        """Add or update a product from form input.
+        
+        Validates input, prompts for update confirmation if product exists.
+        """
         try:
             product_id = int(self.id_entry.get())
             name = self.name_entry.get().strip()
@@ -690,7 +999,7 @@ class InventoryApp(ctk.CTk):
                     existing_product.name = name
                     existing_product.category = category
                     existing_product.price = price
-                    existing_product._quantity = quantity  # direct update for quantity
+                    existing_product.quantity = quantity  # Use property setter
                     self.clear_product_form()
                     self.refresh_all()
                     self.show_success(f"Product '{name}' (ID: {product_id}) updated successfully")
@@ -709,7 +1018,8 @@ class InventoryApp(ctk.CTk):
             self.show_error(str(e))
 
     
-    def delete_product(self):
+    def delete_product(self) -> None:
+        """Delete a product after confirmation."""
         try:
             product_id = int(self.product_delete_entry.get())
             
@@ -732,15 +1042,20 @@ class InventoryApp(ctk.CTk):
         except ValueError as e:
             self.show_error(str(e))
 
-    def clear_product_form(self):
+    def clear_product_form(self) -> None:
+        """Clear all product form fields and enable ID field."""
         self.id_entry.configure(state="normal")
-
         self.id_entry.delete(0, 'end')
         self.name_entry.delete(0, 'end')
         self.price_entry.delete(0, 'end')
         self.qty_entry.delete(0, 'end')
 
-    def load_product_into_form(self, product):
+    def load_product_into_form(self, product: Product) -> None:
+        """Load a product into the form for editing.
+        
+        Args:
+            product: Product instance to load
+        """
         self.clear_product_form()
 
         # Fill fields
@@ -755,7 +1070,11 @@ class InventoryApp(ctk.CTk):
 
 
 
-    def update_product_list(self):
+    def update_product_list(self) -> None:
+        """Update product list with search and sorting applied.
+        
+        Applies live search filter and price sorting dynamically.
+        """
         for widget in self.prod_scroll.winfo_children():
             widget.destroy()
         
@@ -821,9 +1140,10 @@ class InventoryApp(ctk.CTk):
 
 
 
-    # ------------------ Stock Operations ------------------
+    # ==================== STOCK OPERATIONS ====================
     
-    def update_stock(self):
+    def update_stock(self) -> None:
+        """Update stock quantity for a product."""
         try:
             product_id = int(self.stock_id_entry.get())
             amount = int(self.stock_amount_entry.get())
@@ -840,7 +1160,8 @@ class InventoryApp(ctk.CTk):
         except ValueError as e:
             self.show_error(str(e))
 
-    def apply_low_stock_threshold(self):
+    def apply_low_stock_threshold(self) -> None:
+        """Apply and save the low stock threshold setting."""
         try:
             value = int(self.threshold_entry.get())
 
@@ -860,7 +1181,8 @@ class InventoryApp(ctk.CTk):
             )
 
 
-    def update_low_stock_list(self):
+    def update_low_stock_list(self) -> None:
+        """Update low stock alert list based on current threshold."""
         for widget in self.low_stock_scroll.winfo_children():
             widget.destroy()
         
@@ -886,10 +1208,17 @@ class InventoryApp(ctk.CTk):
                 label = ctk.CTkLabel(stock_frame, text=f"{p}", anchor="w",  text_color="#FF7E7E")
                 label.pack(side="left", padx=10, pady=5, fill="x", expand=True)
 
-    # ------------------ Utility Functions ------------------
+    # ==================== UTILITY FUNCTIONS ====================
     
-    def refresh_all(self):
-        """Refresh all UI elements"""
+    def refresh_all(self) -> None:
+        """Refresh all UI elements and auto-save inventory.
+        
+        Updates:
+        - Category list
+        - Product list
+        - Low stock alerts
+        - Total inventory value
+        """
         self.update_category_list()
         self.update_product_list()
         self.update_low_stock_list()
@@ -901,15 +1230,29 @@ class InventoryApp(ctk.CTk):
         try:
             self.storage.save_inventory(self.inventory)
         except Exception as e:
-            print(f"Auto-save error: {e}")
+            logger.error(f"Auto-save error: {e}")
+            self.show_error(f"Failed to save inventory: {e}")
 
-    def show_error(self, message):
+    def show_error(self, message: str) -> None:
+        """Display error message dialog.
+        
+        Args:
+            message: Error message to display
+        """
+        logger.warning(f"User error: {message}")
         messagebox.showerror("Error", message)
 
-    def show_success(self, message):
+    def show_success(self, message: str) -> None:
+        """Display success message dialog.
+        
+        Args:
+            message: Success message to display
+        """
+        logger.info(f"User action: {message}")
         messagebox.showinfo("Success", message)
 
-    def export_inventory_csv(self):
+    def export_inventory_csv(self) -> None:
+        """Export current inventory to CSV file."""
         try:
             self.storage.export_to_csv(self.inventory)
             self.show_success("Inventory exported successfully as inventory_export.csv")
@@ -918,7 +1261,8 @@ class InventoryApp(ctk.CTk):
         except Exception as e:
             self.show_error(f"Export failed: {e}")
     
-    def export_inventory_pdf(self):
+    def export_inventory_pdf(self) -> None:
+        """Export current inventory to PDF report."""
         try:
             self.storage.export_to_pdf(self.inventory)
             self.show_success("Inventory exported successfully as inventory_export.pdf")
@@ -927,16 +1271,18 @@ class InventoryApp(ctk.CTk):
         except Exception as e:
             self.show_error(f"Export failed: {e}")
 
-    def clear_sort(self):
-        self.sort_var.set("Sort by Price")  # reset the dropdown to default value
-        self.update_product_list()          # refresh the product list
+    def clear_sort(self) -> None:
+        """Reset product list sorting to default (by ID)."""
+        self.sort_var.set("Sort by Price")  # Reset dropdown
+        self.update_product_list()  # Refresh list
 
-
-    def on_close(self):
-        """Save and close"""
+    def on_close(self) -> None:
+        """Save inventory and close the application."""
         try:
             self.storage.save_inventory(self.inventory)
+            logger.info("Application closing. Inventory saved.")
         except Exception as e:
+            logger.error(f"Save error on close: {e}")
             messagebox.showerror("Save Error", f"Could not save inventory: {e}")
         self.destroy()
 
