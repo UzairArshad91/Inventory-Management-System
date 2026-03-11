@@ -286,12 +286,31 @@ class Inventory:
     
     Handles adding, removing, updating products and their stock levels,
     as well as category management and inventory valuation.
+
+    The inventory maintains a "dirty" flag that is set whenever the data
+    changes. This enables debounced autosave behavior from the GUI layer.
     """
     
     def __init__(self) -> None:
         """Initialize an empty inventory with a category manager."""
         self._products: Dict[int, Product] = {}
         self.category_manager: CategoryManager = CategoryManager()
+        self._dirty: bool = False
+
+    # dirty flag helpers
+    def _mark_dirty(self) -> None:
+        """Mark inventory as modified."""
+        self._dirty = True
+        logger.debug("Inventory marked dirty")
+
+    def clear_dirty(self) -> None:
+        """Clear the dirty state after a successful save."""
+        self._dirty = False
+        logger.debug("Inventory dirty flag cleared")
+
+    def is_dirty(self) -> bool:
+        """Return whether the inventory has unsaved changes."""
+        return self._dirty
 
     def add_product(self, product: Product) -> int:
         """Add a new product or update an existing one.
@@ -315,10 +334,12 @@ class Inventory:
         if product.id in self._products:
             self._products[product.id] = product
             logger.info(f"Product updated: {product}")
+            self._mark_dirty()
             return 1  # Updated
         else:
             self._products[product.id] = product
             logger.info(f"Product added: {product}")
+            self._mark_dirty()
             return 2  # Added
 
     def remove_product(self, product_id: int) -> None:
@@ -340,6 +361,7 @@ class Inventory:
         product = self._products[product_id]
         del self._products[product_id]
         logger.info(f"Product removed: {product}")
+        self._mark_dirty()
 
     def get_product(self, product_id: int) -> Optional[Product]:
         """Get a product by ID.
@@ -405,6 +427,7 @@ class Inventory:
             product.increase_stock(amount)
         else:
             product.decrease_stock(-amount)
+        self._mark_dirty()
 
     def get_total_value(self) -> float:
         """Calculate the total monetary value of all inventory.
@@ -662,6 +685,9 @@ class InventoryApp(ctk.CTk):
         # Load initial data
         self.refresh_all()
         logger.info("Application initialized successfully")
+        
+        # Start periodic autosave (every 5 seconds)
+        self.schedule_autosave()
         
         # Auto-save on close
         self.protocol("WM_DELETE_WINDOW", self.on_close)
@@ -1224,13 +1250,10 @@ class InventoryApp(ctk.CTk):
     # ==================== UTILITY FUNCTIONS ====================
     
     def refresh_all(self) -> None:
-        """Refresh all UI elements and auto-save inventory.
+        """Refresh all UI elements.
         
-        Updates:
-        - Category list
-        - Product list
-        - Low stock alerts
-        - Total inventory value
+        This no longer writes to disk immediately; autosave is handled by a
+        periodic timer to reduce write frequency.
         """
         self.update_category_list()
         self.update_product_list()
@@ -1238,13 +1261,6 @@ class InventoryApp(ctk.CTk):
         
         total = self.inventory.get_total_value()
         self.total_value_label.configure(text=f"Total Inventory Value: ${total:,.2f}")
-        
-        # Auto-save
-        try:
-            self.storage.save_inventory(self.inventory)
-        except Exception as e:
-            logger.error(f"Auto-save error: {e}")
-            self.show_error(f"Failed to save inventory: {e}")
 
     def show_error(self, message: str) -> None:
         """Display error message dialog.
@@ -1285,8 +1301,25 @@ class InventoryApp(ctk.CTk):
             self.show_error(f"Export failed: {e}")
 
     def clear_sort(self) -> None:
-        self.sort_var.set("")
+        """Reset product list sorting to default (by ID)."""
+        self.sort_var.set("Sort by Price")
         self.update_product_list()
+
+    # ------------------ Autosave Helpers ------------------
+    def schedule_autosave(self) -> None:
+        """Schedule periodic autosave checks."""
+        self.after(5000, self._autosave)
+
+    def _autosave(self) -> None:
+        """Autosave inventory if it has unsaved changes."""
+        if self.inventory.is_dirty():
+            try:
+                self.storage.save_inventory(self.inventory)
+                self.inventory.clear_dirty()
+                logger.info("Autosave completed")
+            except Exception as e:
+                logger.error(f"Autosave failed: {e}")
+        self.schedule_autosave()
 
     def on_close(self) -> None:
         """Save inventory and close the application."""
