@@ -119,7 +119,7 @@ class Product:
 
     def _validate_id(self, id: int) -> None:
         """Validate that product ID is a positive integer."""
-        if not isinstance(id, int) or id <= PRODUCT_ID_MIN - 1:
+        if not isinstance(id, int) or isinstance(id, bool) or id < PRODUCT_ID_MIN:
             raise InvalidInputError("Product ID must be a positive integer.")
 
     def _validate_name(self, name: str) -> None:
@@ -138,12 +138,12 @@ class Product:
 
     def _validate_price(self, price: float) -> None:
         """Validate that price is a non-negative number."""
-        if not isinstance(price, (int, float)) or price < 0:
+        if not isinstance(price, (int, float)) or isinstance(price, bool) or price < 0:
             raise InvalidInputError("Price must be a non-negative number.")
 
     def _validate_quantity(self, quantity: int) -> None:
         """Validate that quantity is a non-negative integer."""
-        if not isinstance(quantity, int) or quantity < 0:
+        if not isinstance(quantity, int) or isinstance(quantity, bool) or quantity < 0:
             raise InvalidInputError("Quantity must be a non-negative integer.")
 
     @property
@@ -177,7 +177,7 @@ class Product:
         Raises:
             InvalidInputError: If amount is invalid
         """
-        if not isinstance(amount, int) or amount < 0:
+        if not isinstance(amount, int) or isinstance(amount, bool) or amount < 0:
             raise InvalidInputError("Stock increase amount must be a non-negative integer.")
         self._quantity += amount
         logger.info(f"Stock increased for {self.name} (ID: {self.id}) by {amount}. New quantity: {self._quantity}")
@@ -191,7 +191,7 @@ class Product:
         Raises:
             InvalidInputError: If amount is invalid or exceeds available stock
         """
-        if not isinstance(amount, int) or amount < 0:
+        if not isinstance(amount, int) or isinstance(amount, bool) or amount < 0:
             raise InvalidInputError("Stock decrease amount must be a non-negative integer.")
         if amount > self._quantity:
             raise InvalidInputError(f"Cannot decrease stock by {amount}. Only {self._quantity} items available.")
@@ -238,6 +238,9 @@ class CategoryManager:
         if len(category.strip()) > MAX_CATEGORY_NAME_LENGTH:
             raise ValueError(f"Category name cannot exceed {MAX_CATEGORY_NAME_LENGTH} characters.")
         clean_category = category.strip()
+        if clean_category in self._categories:
+            raise ValueError(f"Category '{clean_category}' already exists.")
+        self._categories.add(clean_category)
         self._categories.add(clean_category)
         logger.info(f"Category '{clean_category}' added.")
 
@@ -531,10 +534,11 @@ class StorageManager:
                         p_data['quantity']
                     )
                     inv.add_product(p)
+                inv.clear_dirty()
                 logger.info(f"Inventory loaded from {self.filename}")
             else:
                 logger.info("No existing inventory file found. Starting with empty inventory.")
-        except (FileNotFoundError, json.JSONDecodeError, KeyError, TypeError) as e:
+        except (FileNotFoundError, json.JSONDecodeError, KeyError, TypeError, InventoryError, ValueError) as e:
             logger.error(f"Error loading inventory: {e}")
         return inv
 
@@ -613,8 +617,12 @@ class StorageManager:
             for product in inventory.list_products():
                 if y < 50:  # New page
                     c.showPage()
-                    c.setFont("Helvetica", 10)
                     y = height - 50
+                    c.setFont("Helvetica-Bold", 10)
+                    for header, x in zip(headers, x_positions):
+                        c.drawString(x, y, header)
+                    y -= 20
+                    c.setFont("Helvetica", 10)
 
                 c.drawString(50, y, str(product.id))
                 c.drawString(100, y, product.name[:20])
@@ -941,10 +949,11 @@ class InventoryApp(ctk.CTk):
         
         try:
             self.inventory.category_manager.add_category(name)
+            self.inventory._mark_dirty()
             self.cat_entry.delete(0, 'end')
             self.refresh_all()
             self.show_success(f"Category '{name}' added successfully")
-        except ValueError as e:
+        except (ValueError, InventoryError) as e:
             self.show_error(str(e))
     
     def delete_category(self) -> None:
@@ -965,10 +974,11 @@ class InventoryApp(ctk.CTk):
         
         try:
             self.inventory.category_manager.remove_category(name, self.inventory)
+            self.inventory._mark_dirty()
             self.cat_delete_entry.delete(0, 'end')
             self.refresh_all()
             self.show_success(f"Category '{name}' deleted successfully")
-        except ValueError as e:
+        except (ValueError, InventoryError) as e:
             self.show_error(str(e))
 
     def update_category_list(self) -> None:
@@ -990,15 +1000,17 @@ class InventoryApp(ctk.CTk):
                 label = ctk.CTkLabel(cat_frame, text=f"• {cat} ({count} products)")
                 label.pack(side="left", padx=10, pady=5)
 
-        # Update category dropdown
+        # Update category dropdown, preserving current selection if still valid
         if categories:
+            current = self.cat_dropdown.get()
             self.cat_dropdown.configure(values=categories)
-            if categories:
-                self.cat_dropdown.configure(values=categories)
-                self.cat_dropdown.set(categories[0])
+            if current in categories:
+                self.cat_dropdown.set(current)
             else:
-                self.cat_dropdown.configure(values=["Select Category"])
-                self.cat_dropdown.set("Select Category")
+                self.cat_dropdown.set(categories[0])
+        else:
+            self.cat_dropdown.configure(values=["Select Category"])
+            self.cat_dropdown.set("Select Category")
 
 
 
@@ -1030,10 +1042,13 @@ class InventoryApp(ctk.CTk):
                     "Do you want to update this product with the new values?"
                 ):
                     # Update existing product
-                    existing_product.name = name
-                    existing_product.category = category
+                    existing_product._validate_name(name)
+                    existing_product._validate_category(category)
+                    existing_product.name = name.strip()
+                    existing_product.category = category.strip()
                     existing_product.price = price
                     existing_product.quantity = quantity  # Use property setter
+                    self.inventory._mark_dirty()
                     self.clear_product_form()
                     self.refresh_all()
                     self.show_success(f"Product '{name}' (ID: {product_id}) updated successfully")
@@ -1048,7 +1063,7 @@ class InventoryApp(ctk.CTk):
                 self.refresh_all()
                 self.show_success(f"Product '{name}' added successfully")
             
-        except ValueError as e:
+        except (ValueError, InventoryError) as e:
             self.show_error(str(e))
 
     
@@ -1073,7 +1088,7 @@ class InventoryApp(ctk.CTk):
             self.refresh_all()
             self.show_success(f"Product '{product.name}' (ID: {product_id}) deleted successfully")
             
-        except ValueError as e:
+        except (ValueError, InventoryError) as e:
             self.show_error(str(e))
 
     def clear_product_form(self) -> None:
@@ -1181,6 +1196,9 @@ class InventoryApp(ctk.CTk):
         try:
             product_id = int(self.stock_id_entry.get())
             amount = int(self.stock_amount_entry.get())
+
+            if amount == 0:
+                raise ValueError("Amount cannot be zero.")
             
             self.inventory.update_stock(product_id, amount)
             
@@ -1191,7 +1209,7 @@ class InventoryApp(ctk.CTk):
             action = "increased" if amount > 0 else "decreased"
             self.show_success(f"Stock {action} by {abs(amount)}")
             
-        except ValueError as e:
+        except (ValueError, InventoryError) as e:
             self.show_error(str(e))
 
     def apply_low_stock_threshold(self) -> None:
@@ -1324,8 +1342,9 @@ class InventoryApp(ctk.CTk):
     def on_close(self) -> None:
         """Save inventory and close the application."""
         try:
-            self.storage.save_inventory(self.inventory)
-            logger.info("Application closing. Inventory saved.")
+            if self.inventory.is_dirty():
+                self.storage.save_inventory(self.inventory)
+                logger.info("Application closing. Inventory saved.")
         except Exception as e:
             logger.error(f"Save error on close: {e}")
             messagebox.showerror("Save Error", f"Could not save inventory: {e}")
