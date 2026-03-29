@@ -10,8 +10,6 @@ from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 from datetime import datetime
 
-# ==================== CONFIGURATION & CONSTANTS ====================
-
 # Application Settings
 WINDOW_SIZE_FACTOR = 0.8
 HEADER_HEIGHT = 80
@@ -52,7 +50,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-# ==================== CUSTOM EXCEPTIONS ====================
+# CUSTOM EXCEPTIONS
 
 class InventoryError(Exception):
     """Base exception for inventory-related errors."""
@@ -641,7 +639,7 @@ class StorageManager:
 
 
 
-# ==================== GUI SECTION ====================
+#GUI SECTION
 
 class InventoryApp(ctk.CTk):
     """Main GUI application for inventory management system.
@@ -951,7 +949,7 @@ class InventoryApp(ctk.CTk):
         self.low_stock_scroll.pack(fill="both", expand=True, padx=5, pady=5)
 
 
-    # ==================== CATEGORY OPERATIONS ====================
+    #CATEGORY OPERATIONS
     
     def add_category(self) -> None:
         """Add a new category from user input."""
@@ -1038,7 +1036,7 @@ class InventoryApp(ctk.CTk):
 
 
 
-    # ==================== PRODUCT OPERATIONS ====================
+    #PRODUCT OPERATIONS
 
     def get_next_product_id(self) -> int:
         """Return the next suggested product ID (last ID + 1)."""
@@ -1166,24 +1164,24 @@ class InventoryApp(ctk.CTk):
         
         products = self.inventory.list_products()
 
-        # 1️⃣ Apply search
+        # Apply search
         search_text = self.search_entry.get().strip().lower()
         if search_text:
             products = [p for p in products if search_text in p.name.lower()]
 
-        # 2️⃣ Apply category filter
+        #Apply category filter
         selected_category = self.category_filter_var.get() if self.category_filter_var else "All Categories"
         if selected_category and selected_category != "All Categories":
             products = [p for p in products if p.category == selected_category]
 
-        # 3️⃣ Apply sorting
+        #Apply sorting
         sort_option = self.sort_var.get()
         if sort_option == "Low to High":
             products.sort(key=lambda p: p.price)
         elif sort_option == "High to Low":
             products.sort(key=lambda p: p.price, reverse=True)
 
-        # 4️⃣ Display products in table
+        #Display products in table
         if not products:
             label = ctk.CTkLabel(self.prod_scroll, text="No products found.", text_color="gray")
             label.pack(pady=10)
@@ -1231,7 +1229,7 @@ class InventoryApp(ctk.CTk):
 
 
 
-    # ==================== STOCK OPERATIONS ====================
+    #STOCK OPERATIONS
     
     def update_stock(self) -> None:
         """Update stock quantity for a product."""
@@ -1307,7 +1305,7 @@ class InventoryApp(ctk.CTk):
                 label = ctk.CTkLabel(stock_frame, text=f"{p}", anchor="w",  text_color="#FF7E7E")
                 label.pack(side="left", padx=10, pady=5, fill="x", expand=True)
 
-    # ==================== UTILITY FUNCTIONS ====================
+    #UTILITY FUNCTIONS
     
     def refresh_all(self) -> None:
         """Refresh all UI elements.
@@ -1365,7 +1363,7 @@ class InventoryApp(ctk.CTk):
         self.sort_var.set("Sort by Price")
         self.update_product_list()
 
-    # ------------------ Autosave Helpers ------------------
+    #Autosave Helpers
     def schedule_autosave(self) -> None:
         """Schedule periodic autosave checks."""
         self.after(5000, self._autosave)
